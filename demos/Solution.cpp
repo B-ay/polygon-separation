@@ -5,9 +5,13 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <fstream>
 
 struct Vector2D;
 struct Polygon;
+
+#define ENABLE_TIMER 1
 
 using namespace std;
 const double EPS = 1e-6;
@@ -57,6 +61,8 @@ struct Polygon {
         for (auto& v : vertices) {
             v = v + vec;
         }
+        // 移动后需要更新中心点
+        center = center + vec;
     }
 
     // 预计算所有边的法线
@@ -120,12 +126,14 @@ Vector2D GenSolution(const Vector2D& vec)
 
     for (int i = 0; i < 2; ++i) {
         const Polygon& currentPoly = *polygons[i];
+        const auto& axes = currentPoly.axes;
         for (size_t j = 0; j < currentPoly.vertices.size(); ++j) {
-            Vector2D p1 = currentPoly.vertices[j];
-            Vector2D p2 = currentPoly.vertices[(j + 1) % currentPoly.vertices.size()];
-            Vector2D edge = p2 - p1;
+            const Vector2D& axis = axes[j];
+            // Vector2D p1 = currentPoly.vertices[j];
+            // Vector2D p2 = currentPoly.vertices[(j + 1) % currentPoly.vertices.size()];
+            // Vector2D edge = p2 - p1;
 
-            Vector2D axis = edge.Perp().Normalize();
+            // Vector2D axis = edge.Perp().Normalize();
 
             Projection projA = ProjectPolygon(polygon1, axis);
             Projection projB = ProjectPolygon(polyB, axis);
@@ -142,9 +150,9 @@ Vector2D GenSolution(const Vector2D& vec)
             }
         }
     }
-    Vector2D centerA = polygon1.GetCenter();
-    Vector2D centerB = polyB.GetCenter();
-    Vector2D dir = centerB - centerA;
+    // Vector2D centerA = polygon1.GetCenter();
+    // Vector2D centerB = polyB.GetCenter();
+    Vector2D dir = polyB.center - polygon1.center;
 
     if (smallestAxis.Dot(dir) < 0.0) {
         smallestAxis = smallestAxis * -1.0;
@@ -157,10 +165,28 @@ Vector2D GenSolution(const Vector2D& vec)
 void PreProcess()
 {
     // player can perform preprocessing here
+    // 预计算多边形1的边法线和中心点
+    polygon1.Precomputeaxes();
+    polygon1.PrecomputeCenter();
+    
+    // 预计算多边形2的边法线和中心点
+    polygon2.Precomputeaxes();
+    polygon2.PrecomputeCenter();
+
 }
 
 int main()
 {
+    #if ENABLE_TIMER
+    // 打开输出文件
+    std::ofstream outfile("./timer_result.txt");
+    if (!outfile.is_open()) {
+        std::cerr << "错误：无法创建文件 sample/timer_result.txt" << std::endl;
+        return 1;
+    }
+    // 开始计时
+    auto start = std::chrono::high_resolution_clock::now();
+    #endif
     // =============== 1. read polygons ===================
     cin >> n1 >> n2;
 
@@ -210,6 +236,7 @@ int main()
     }
 
     // ================ 4. solve and output results ===================
+    cout << m << endl;
     for (int i = 0; i < m; ++i) {
         const Vector2D& res = GenSolution(testCases[i]);
         cout << fixed << std::setprecision(5) << res.x << " " << res.y << endl;
@@ -219,6 +246,17 @@ int main()
     // send OK after outputting all answer
     cout << "OK" << endl;
     cout.flush();
+    #if ENABLE_TIMER
+    // 结束计时
+    auto end = std::chrono::high_resolution_clock::now();
+    
+    // 计算耗时
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
+    // 输出结果
+    outfile << "程序执行时间: " << duration.count() << " 微秒" << std::endl;
+    outfile << "即: " << duration.count() / 1000.0 << " 毫秒" << std::endl;
+    outfile << "即: " << duration.count() / 1000000.0 << " 秒" << std::endl;
+    #endif
     return 0;
 }
