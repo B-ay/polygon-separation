@@ -136,14 +136,6 @@ void PreProcess()
 
 int main()
 {
-    // 打开输出文件
-    std::ofstream outfile("./timer_result_origin.txt");
-    if (!outfile.is_open()) {
-        std::cerr << "错误：无法创建文件 sample/timer_result.txt" << std::endl;
-        return 1;
-    }
-    // 开始计时
-    auto start = std::chrono::high_resolution_clock::now();
     // =============== 1. read polygons ===================
     cin >> n1 >> n2;
 
@@ -192,6 +184,14 @@ int main()
         return 0;
     }
 
+    // 打开输出文件
+    std::ofstream outfile("./timer_result_origin.txt");
+    if (!outfile.is_open()) {
+        std::cerr << "错误：无法创建文件 sample/timer_result.txt" << std::endl;
+        return 1;
+    }
+    // 开始计时
+    auto start = std::chrono::high_resolution_clock::now();
     // ================ 4. solve and output results ===================
     for (int i = 0; i < m; ++i) {
         const Vector2D& res = GenSolution(testCases[i]);

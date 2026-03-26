@@ -36,13 +36,26 @@ struct Vector2D {
     Vector2D Perp() const { return Vector2D(-y, x); }
 };
 
+struct Projection {
+    double min, max;
+    
+    // 应用平移修正
+    void ApplyTranslation(double translation) {
+        min += translation;
+        max += translation;
+    }
+};
+
 struct Polygon {
     std::vector<Vector2D> vertices;
-    std::vector<Vector2D> axes;      // 预计算的边法线
-    Vector2D center;                 // 预计算的中心点
+    std::vector<Vector2D> axes;              // 预计算的边法线
+    std::vector<Projection> selfProjections; // 多边形自身在所有法线上的投影区间
+    std::vector<Projection> otherProjections; // 多边形在另一个多边形法线上的投影区间（用于交叉投影）
+    Vector2D center;                          // 预计算的中心点
 
     Polygon() = default;
     Polygon(std::initializer_list<Vector2D> vts) : vertices(vts) {}
+    
     // 计算多边形的中心点
     Vector2D GetCenter() const
     {
@@ -63,14 +76,16 @@ struct Polygon {
         }
         // 移动后需要更新中心点
         center = center + vec;
+        // 注意：selfProjections不需要更新，因为我们在使用时动态修正
     }
-
+    
     // 预计算所有边的法线
-    void Precomputeaxes() {
+    void PrecomputeAxes() {
         axes.clear();
         size_t n = vertices.size();
         if (n == 0) return;
         
+        axes.reserve(n);
         for (size_t i = 0; i < n; ++i) {
             Vector2D p1 = vertices[i];
             Vector2D p2 = vertices[(i + 1) % n];
@@ -82,9 +97,76 @@ struct Polygon {
         }
     }
     
+    // 预计算多边形自身在所有法线上的投影区间
+    void PrecomputeSelfProjections() {
+        size_t axisCount = axes.size();
+        if (axisCount == 0) return;
+        
+        selfProjections.resize(axisCount);
+        
+        for (size_t i = 0; i < axisCount; ++i) {
+            const Vector2D& axis = axes[i];
+            
+            // 计算在当前法线上的投影区间
+            double minProj = vertices[0].Dot(axis);
+            double maxProj = minProj;
+            
+            for (size_t j = 1; j < vertices.size(); ++j) {
+                double proj = vertices[j].Dot(axis);
+                if (proj < minProj) minProj = proj;
+                if (proj > maxProj) maxProj = proj;
+            }
+            
+            selfProjections[i] = {minProj, maxProj};
+        }
+    }
+
+    // 预计算本多边形在另一个多边形法线上的投影区间
+    // 输入：另一个多边形的法线集合
+    void PrecomputeOtherProjections(const std::vector<Vector2D>& otherAxes) {
+        size_t axisCount = otherAxes.size();
+        if (axisCount == 0) return;
+        
+        otherProjections.resize(axisCount);
+        
+        for (size_t i = 0; i < axisCount; ++i) {
+            const Vector2D& axis = otherAxes[i];
+            
+            // 计算在当前法线上的投影区间
+            double minProj = vertices[0].Dot(axis);
+            double maxProj = minProj;
+            
+            for (size_t j = 1; j < vertices.size(); ++j) {
+                double proj = vertices[j].Dot(axis);
+                if (proj < minProj) minProj = proj;
+                if (proj > maxProj) maxProj = proj;
+            }
+            
+            otherProjections[i] = {minProj, maxProj};
+        }
+    }
+    
     // 预计算中心点
     void PrecomputeCenter() {
-        center = GetCenter();  // 复用原有GetCenter方法
+        center = GetCenter();
+    }
+
+    // 快速获取自身平移后的投影区间
+    Projection GetSelfProjectionWithTranslation(const Vector2D& translation, size_t axisIndex) const {
+        double translationProj = translation.Dot(axes[axisIndex]);
+        Projection result = selfProjections[axisIndex];
+        result.ApplyTranslation(translationProj);
+        return result;
+    }
+    
+    // 快速获取自身平移后在其他多边形法线上的投影区间
+    Projection GetOtherProjectionWithTranslation(const Vector2D& translation, 
+                                                  const Vector2D& axis, 
+                                                  size_t projectionIndex) const {
+        double translationProj = translation.Dot(axis);
+        Projection result = otherProjections[projectionIndex];
+        result.ApplyTranslation(translationProj);
+        return result;
     }
 };
 
@@ -93,10 +175,7 @@ Polygon polygon1;
 Polygon polygon2;
 vector<Vector2D> testCases;
 
-struct Projection {
-    double min, max;
-};
-
+// 通用的投影函数（用于计算非预计算轴上的投影）
 Projection ProjectPolygon(const Polygon& poly, const Vector2D& axis)
 {
     double minProj = poly.vertices[0].Dot(axis);
@@ -116,44 +195,59 @@ Projection ProjectPolygon(const Polygon& poly, const Vector2D& axis)
 
 Vector2D GenSolution(const Vector2D& vec)
 {
-    Polygon polyB = polygon2;
-    polyB.MoveByVec(vec);
-
     double minOverlap = std::numeric_limits<double>::infinity();
     Vector2D smallestAxis;
-
-    const Polygon* polygons[2] = {&polygon1, &polyB};
-
-    for (int i = 0; i < 2; ++i) {
-        const Polygon& currentPoly = *polygons[i];
-        const auto& axes = currentPoly.axes;
-        for (size_t j = 0; j < currentPoly.vertices.size(); ++j) {
-            const Vector2D& axis = axes[j];
-            // Vector2D p1 = currentPoly.vertices[j];
-            // Vector2D p2 = currentPoly.vertices[(j + 1) % currentPoly.vertices.size()];
-            // Vector2D edge = p2 - p1;
-
-            // Vector2D axis = edge.Perp().Normalize();
-
-            Projection projA = ProjectPolygon(polygon1, axis);
-            Projection projB = ProjectPolygon(polyB, axis);
-
-            if (projA.max <= projB.min || projB.max <= projA.min) {
-                return {0.0, 0.0};
-            }
-
-            double overlap = std::min(projA.max, projB.max) - std::max(projA.min, projB.min);
-
-            if (overlap < minOverlap) {
-                minOverlap = overlap;
-                smallestAxis = axis;
-            }
+    
+    // 多边形A固定不动，多边形B平移vec
+    // 注意：polygon2的selfProjections是基于原始位置的，平移后需要修正
+    
+    // 检查多边形1的每条法线
+    for (size_t j = 0; j < polygon1.axes.size(); ++j) {
+        const Vector2D& axis = polygon1.axes[j];
+        
+        // 多边形A的投影（固定）
+        const Projection& projA = polygon1.selfProjections[j];
+        // 多边形B平移后的投影
+        Projection projB = polygon2.GetOtherProjectionWithTranslation(vec, axis, j);
+        
+        // 分离轴检测
+        if (projA.max <= projB.min || projB.max <= projA.min) {
+            return {0.0, 0.0};
+        }
+        
+        double overlap = std::min(projA.max, projB.max) - std::max(projA.min, projB.min);
+        
+        if (overlap < minOverlap) {
+            minOverlap = overlap;
+            smallestAxis = axis;
         }
     }
-    // Vector2D centerA = polygon1.GetCenter();
-    // Vector2D centerB = polyB.GetCenter();
-    Vector2D dir = polyB.center - polygon1.center;
+    
+    // 检查多边形2的每条法线
+    for (size_t j = 0; j < polygon2.axes.size(); ++j) {
+        const Vector2D& axis = polygon2.axes[j];
+        
+        // 多边形A：
+        Projection projA = polygon1.otherProjections[j]; // 直接使用预计算的交叉投影
+        // 多边形B平移后的投影（使用快速修正）
+        Projection projB = polygon2.GetSelfProjectionWithTranslation(vec, j);
+        
+        // 分离轴检测
+        if (projA.max <= projB.min || projB.max <= projA.min) {
+            return {0.0, 0.0};
+        }
+        
+        double overlap = std::min(projA.max, projB.max) - std::max(projA.min, projB.min);
+        
+        if (overlap < minOverlap) {
+            minOverlap = overlap;
+            smallestAxis = axis;
+        }
+    }
 
+    // 计算方向并修正MTV
+    Vector2D dir = (polygon2.center + vec) - polygon1.center;
+    
     if (smallestAxis.Dot(dir) < 0.0) {
         smallestAxis = smallestAxis * -1.0;
     }
@@ -164,29 +258,24 @@ Vector2D GenSolution(const Vector2D& vec)
 // 选手在规定的时间内进行预处理，完成后返回OK
 void PreProcess()
 {
-    // player can perform preprocessing here
-    // 预计算多边形1的边法线和中心点
-    polygon1.Precomputeaxes();
+    // 预计算多边形1的边法线、自身投影和中心点
+    polygon1.PrecomputeAxes();
+    polygon1.PrecomputeSelfProjections();
     polygon1.PrecomputeCenter();
     
-    // 预计算多边形2的边法线和中心点
-    polygon2.Precomputeaxes();
+    // 预计算多边形2的边法线、自身投影和中心点
+    polygon2.PrecomputeAxes();
+    polygon2.PrecomputeSelfProjections();
     polygon2.PrecomputeCenter();
 
+    // 预计算交叉投影：多边形1在多边形2的法线上的投影
+    polygon1.PrecomputeOtherProjections(polygon2.axes);
+    // 预计算交叉投影：多边形2在多边形1的法线上的投影
+    polygon2.PrecomputeOtherProjections(polygon1.axes);
 }
 
 int main()
 {
-    #if ENABLE_TIMER
-    // 打开输出文件
-    std::ofstream outfile("./timer_result.txt");
-    if (!outfile.is_open()) {
-        std::cerr << "错误：无法创建文件 sample/timer_result.txt" << std::endl;
-        return 1;
-    }
-    // 开始计时
-    auto start = std::chrono::high_resolution_clock::now();
-    #endif
     // =============== 1. read polygons ===================
     cin >> n1 >> n2;
 
@@ -235,8 +324,18 @@ int main()
         return 0;
     }
 
+    #if ENABLE_TIMER
+    // 打开输出文件
+    std::ofstream outfile("./timer_result.txt");
+    if (!outfile.is_open()) {
+        std::cerr << "错误：无法创建文件 sample/timer_result.txt" << std::endl;
+        return 1;
+    }
+    // 开始计时
+    auto start = std::chrono::high_resolution_clock::now();
+    #endif
     // ================ 4. solve and output results ===================
-    cout << m << endl;
+    // cout << m << endl;
     for (int i = 0; i < m; ++i) {
         const Vector2D& res = GenSolution(testCases[i]);
         cout << fixed << std::setprecision(5) << res.x << " " << res.y << endl;
