@@ -7,11 +7,16 @@
 #include <vector>
 #include <chrono>
 #include <fstream>
+#include <thread>
+#include <mutex>
+// #include <future>
+#include <atomic>
 
 struct Vector2D;
 struct Polygon;
 
 #define ENABLE_TIMER 1
+#define NUM_THREADS 16  // 可以根据需要调整线程数
 
 using namespace std;
 const double EPS = 1e-6;
@@ -49,7 +54,7 @@ struct Projection {
 struct Polygon {
     std::vector<Vector2D> vertices;
     std::vector<Vector2D> axes;              // 预计算的边法线
-    std::vector<Projection> selfProjections; // 多边形自身在所有法线上的投影区间
+    std::vector<Projection> selfProjections; // 多边形在自身所有法线上的投影区间
     std::vector<Projection> otherProjections; // 多边形在另一个多边形法线上的投影区间（用于交叉投影）
     Vector2D center;                          // 预计算的中心点
 
@@ -255,7 +260,61 @@ Vector2D GenSolution(const Vector2D& vec)
     return {smallestAxis * minOverlap};
 }
 
-// 选手在规定的时间内进行预处理，完成后返回OK
+// 线程工作函数：处理一段连续范围的测试用例
+void ProcessTestCaseRange(int startIdx, int endIdx, 
+                          std::vector<Vector2D>& results,
+                          std::mutex& resultsMutex) {
+    std::vector<Vector2D> localResults;
+    localResults.reserve(endIdx - startIdx);
+    
+    for (int i = startIdx; i < endIdx; ++i) {
+        const Vector2D& res = GenSolution(testCases[i]);
+        localResults.push_back(res);
+    }
+    
+    // 将本地结果合并到全局结果数组
+    std::lock_guard<std::mutex> lock(resultsMutex);
+    for (int i = startIdx; i < endIdx; ++i) {
+        results[i] = localResults[i - startIdx];
+    }
+}
+
+// 使用线程池处理所有测试用例
+void ProcessAllTestCasesParallel() {
+    std::vector<Vector2D> results(m);
+    std::mutex resultsMutex;
+    std::vector<std::thread> threads;
+    
+    // 计算每个线程处理的测试用例数量
+    int casesPerThread = m / NUM_THREADS;
+    int remainingCases = m % NUM_THREADS;
+    
+    int currentStart = 0;
+    for (int t = 0; t < NUM_THREADS; ++t) {
+        int currentEnd = currentStart + casesPerThread;
+        if (t < remainingCases) {
+            currentEnd++;
+        }
+        
+        if (currentStart < currentEnd) {
+            threads.emplace_back(ProcessTestCaseRange, currentStart, currentEnd, 
+                               std::ref(results), std::ref(resultsMutex));
+        }
+        currentStart = currentEnd;
+    }
+    
+    // 等待所有线程完成
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    
+    // 按顺序输出结果
+    for (int i = 0; i < m; ++i) {
+        cout << fixed << std::setprecision(5) << results[i].x << " " << results[i].y << endl;
+        cout.flush();
+    }
+}
+
 void PreProcess()
 {
     // 预计算多边形1的边法线、自身投影和中心点
@@ -334,17 +393,15 @@ int main()
     // 开始计时
     auto start = std::chrono::high_resolution_clock::now();
     #endif
+    
     // ================ 4. solve and output results ===================
     // cout << m << endl;
-    for (int i = 0; i < m; ++i) {
-        const Vector2D& res = GenSolution(testCases[i]);
-        cout << fixed << std::setprecision(5) << res.x << " " << res.y << endl;
-        cout.flush();
-    }
+    ProcessAllTestCasesParallel();
 
     // send OK after outputting all answer
     cout << "OK" << endl;
     cout.flush();
+    
     #if ENABLE_TIMER
     // 结束计时
     auto end = std::chrono::high_resolution_clock::now();
